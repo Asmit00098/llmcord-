@@ -262,7 +262,7 @@ async def on_message(new_msg: discord.Message) -> None:
     openai_kwargs = dict(model=model, messages=messages[::-1], stream=True, extra_headers=extra_headers, extra_query=extra_query, extra_body=extra_body)
 
     if use_plain_responses := config.get("use_plain_responses", False):
-        max_message_length = 4000
+        max_message_length = 2000
     else:
         max_message_length = 4096 - len(STREAMING_INDICATOR)
         embed = discord.Embed.from_dict(dict(fields=[dict(name=warning, value="", inline=False) for warning in sorted(user_warnings)]))
@@ -299,16 +299,24 @@ async def on_message(new_msg: discord.Message) -> None:
 
                 response_contents[-1] += new_content
 
-                if not use_plain_responses:
-                    time_delta = datetime.now().timestamp() - last_task_time
+                time_delta = datetime.now().timestamp() - last_task_time
 
-                    ready_to_edit = time_delta >= EDIT_DELAY_SECONDS
-                    msg_split_incoming = finish_reason == None and len(response_contents[-1] + curr_content) > max_message_length
-                    is_final_edit = finish_reason != None or msg_split_incoming
-                    is_good_finish = finish_reason != None and finish_reason.lower() in ("stop", "end_turn")
+                ready_to_edit = time_delta >= EDIT_DELAY_SECONDS
+                msg_split_incoming = finish_reason == None and len(response_contents[-1] + curr_content) > max_message_length
+                is_final_edit = finish_reason != None or msg_split_incoming
+                is_good_finish = finish_reason != None and finish_reason.lower() in ("stop", "end_turn")
 
-                    if start_next_msg or ready_to_edit or is_final_edit:
-                        embed.description = response_contents[-1] if is_final_edit else (response_contents[-1] + STREAMING_INDICATOR)
+                if start_next_msg or ready_to_edit or is_final_edit:
+                    display_text = response_contents[-1] if is_final_edit else (response_contents[-1] + STREAMING_INDICATOR)
+
+                    if use_plain_responses:
+                        if start_next_msg:
+                            await reply_helper(content=display_text)
+                        else:
+                            await asyncio.sleep(EDIT_DELAY_SECONDS - time_delta)
+                            await response_msgs[-1].edit(content=display_text)
+                    else:
+                        embed.description = display_text
                         embed.color = EMBED_COLOR_COMPLETE if msg_split_incoming or is_good_finish else EMBED_COLOR_INCOMPLETE
 
                         if start_next_msg:
@@ -317,11 +325,7 @@ async def on_message(new_msg: discord.Message) -> None:
                             await asyncio.sleep(EDIT_DELAY_SECONDS - time_delta)
                             await response_msgs[-1].edit(embed=embed)
 
-                        last_task_time = datetime.now().timestamp()
-
-            if use_plain_responses:
-                for content in response_contents:
-                    await reply_helper(view=LayoutView().add_item(TextDisplay(content=content)))
+                    last_task_time = datetime.now().timestamp()
 
     except Exception:
         logging.exception("Error while generating response")
